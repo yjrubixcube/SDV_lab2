@@ -137,7 +137,17 @@ def undistort_points(image_points, camera_matrix, dist_coeffs):
     """
     # TODO: Implement this function
     # Your code here (approximately 1-2 lines)
+    
+    # print(image_points.shape)
+    reshaped_points = np.reshape(image_points, (len(image_points), 1, 2))
+    # print(reshaped_points.shape)
 
+    results = cv2.undistortPoints(reshaped_points, camera_matrix, dist_coeffs)
+
+    # print(results.shape)
+    results = np.reshape(results, (len(results), 2))
+    # print(results.shape)
+    return results
     raise NotImplementedError("TODO 1: Implement undistort_points()")
 
 
@@ -186,6 +196,14 @@ def solve_pnp(object_points, image_points, camera_matrix):
     # TODO: Implement this function
     # Your code here (approximately 3-5 lines)
 
+    # print(object_points.shape)
+    # print(image_points.shape)
+    # print(camera_matrix)
+
+    retval, rvec, tvec = cv2.solvePnP(object_points, image_points, camera_matrix, np.zeros(5), flags=cv2.SOLVEPNP_ITERATIVE)
+
+    return retval, rvec, tvec
+
     raise NotImplementedError("TODO 2: Implement solve_pnp()")
 
 
@@ -227,6 +245,18 @@ def create_transform_matrix(rvec, tvec):
     """
     # TODO: Implement this function
     # Your code here (approximately 5-8 lines)
+
+    rot_mat, jacobian = cv2.Rodrigues(rvec)
+
+    transform_mat = np.zeros((4, 4))
+
+    transform_mat[:3, :3] = rot_mat
+
+    transform_mat[:3, 3] = tvec.reshape(3)
+
+    transform_mat[3, 3] = 1
+
+    return transform_mat
 
     raise NotImplementedError("TODO 3: Implement create_transform_matrix()")
 
