@@ -1,0 +1,352 @@
+From 3cad7e62bc40ad19dd1d800b8b4df79c2fdbf710 Mon Sep 17 00:00:00 2001
+From: pooiscoding <pooisworking@gmail.com>
+Date: Sat, 11 Oct 2025 15:36:00 +0800
+Subject: [PATCH] interactive controller
+
+---
+ .../extrinsic_solver_node/controller.py       |  72 +++++++++++
+ .../extrinsic_solver_node/main.py             | 122 +++++++++++-------
+ .../extrinsic_solver_controller.launch.py     |  11 ++
+ src/ros2/extrinsic_solver_node/setup.py       |   1 +
+ .../launch/extrinsic_calibration.launch.xml   |   5 +-
+ 5 files changed, 162 insertions(+), 49 deletions(-)
+ create mode 100644 src/ros2/extrinsic_solver_node/extrinsic_solver_node/controller.py
+ create mode 100644 src/ros2/extrinsic_solver_node/launch/extrinsic_solver_controller.launch.py
+
+diff --git a/src/ros2/extrinsic_solver_node/extrinsic_solver_node/controller.py b/src/ros2/extrinsic_solver_node/extrinsic_solver_node/controller.py
+new file mode 100644
+index 0000000..be2ab42
+--- /dev/null
++++ b/src/ros2/extrinsic_solver_node/extrinsic_solver_node/controller.py
+@@ -0,0 +1,72 @@
++import rclpy
++from rclpy.node import Node
++from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
++from std_msgs.msg import String, Bool
++
++import threading
++
++class ExtrinsicSolverController(Node):
++    def __init__(self):
++        super().__init__('extrinsic_solver_controller')
++
++        qos_profile = QoSProfile(
++            reliability=ReliabilityPolicy.RELIABLE,
++            history=HistoryPolicy.KEEP_LAST,
++            depth=1,
++        )
++
++        self.extrinsic_solver_controller_request = self.create_publisher(
++            String, "extrinsic_solver_controll_request", qos_profile
++        )
++
++        self.extrinsic_solver_controller_response = self.create_subscription(
++            Bool,
++            "extrinsic_solver_controll_response",
++            self.controll_callback,
++            qos_profile
++        )
++
++        self.lock = threading.Lock()
++        self.get_response = False
++        self.last_response = None
++
++        self.get_logger().info("Extrinsic Solver Controller Start ~")
++
++
++    def controll_callback(self, msg: Bool):
++        with self.lock:
++            if msg.data:
++                self.last_response = True
++            else:
++                self.last_response = False
++            self.get_response = True
++
++    def run(self):
++        while rclpy.ok():
++            cmd = input("Type 'a' for capturing...").strip()
++            self.get_response = False
++            if cmd == 'a':
++                req = String()
++                req.data = "capture"
++                self.extrinsic_solver_controller_request.publish(req)
++                print("publish") 
++                while not self.get_response:
++                    rclpy.spin_once(self)
++                    print("wake up")
++
++                if self.last_response:
++                    self.get_logger().info("OK ... captured")
++                else:
++                    self.get_logger().info("Failed ... try again")
++            else:
++                self.get_logger().warn("Invalid ...")
++
++def main():
++    rclpy.init()
++    node = ExtrinsicSolverController()
++    node.run()
++    node.destroy_node()
++    rclpy.shutdown()
++
++if __name__ == '__main__':
++    main()
+diff --git a/src/ros2/extrinsic_solver_node/extrinsic_solver_node/main.py b/src/ros2/extrinsic_solver_node/extrinsic_solver_node/main.py
+index a67056b..4bf0f66 100644
+--- a/src/ros2/extrinsic_solver_node/extrinsic_solver_node/main.py
++++ b/src/ros2/extrinsic_solver_node/extrinsic_solver_node/main.py
+@@ -33,10 +33,9 @@ from scipy.spatial.transform import Rotation as R  # Quaternion operations
+ from sensor_msgs.msg import CameraInfo
+ 
+ # ROS2 message types
+-from std_msgs.msg import Header
++from std_msgs.msg import Header, String, Bool
+ from vision_msgs.msg import Detection2D, Detection2DArray, Detection3D, Detection3DArray
+ 
+-
+ @dataclass
+ class ArUcoMarker:
+     """
+@@ -118,6 +117,10 @@ class EducationalExtrinsicSolver(Node):
+         # We use simple variables instead of complex synchronization
+         self.latest_aruco_detection: Optional[Detection2DArray] = None
+         self.latest_board_detection: Optional[Detection3DArray] = None
++
++        self.selected_aruco_detection: List[Detection2DArray] = []
++        self.selected_board_detection: List[Detection3DArray] = []
++
+         self.camera_info: Optional[CameraInfo] = None
+ 
+         # Thread safety for simple caching
+@@ -149,6 +152,22 @@ class EducationalExtrinsicSolver(Node):
+             qos_profile,
+         )
+ 
++        qos_profile_reliable = QoSProfile(
++            reliability=ReliabilityPolicy.RELIABLE,
++            history=HistoryPolicy.KEEP_LAST,
++            depth=1,
++        )
++        self.extrinsic_solver_controller_request = self.create_subscription(
++            String,
++            "extrinsic_solver_controll_request",
++            self.controll_callback,
++            qos_profile_reliable
++        )
++
++        self.extrinsic_solver_controller_response = self.create_publisher(
++            Bool, "extrinsic_solver_controll_response", qos_profile_reliable
++        )
++
+         # Derive camera_info topic from camera_topic parameter (image_pipeline convention)
+         camera_topic = (
+             self.get_parameter("camera_topic").get_parameter_value().string_value
+@@ -213,7 +232,6 @@ class EducationalExtrinsicSolver(Node):
+                 self.latest_aruco_detection = msg
+ 
+             # Try to process if we have both detection types
+-            self._try_solve_calibration()
+         else:
+             self.get_logger().debug("Ignoring empty ArUco detection")
+ 
+@@ -236,10 +254,28 @@ class EducationalExtrinsicSolver(Node):
+                 self.latest_board_detection = msg
+ 
+             # Try to process if we have both detection types
+-            self._try_solve_calibration()
+         else:
+             self.get_logger().warn("Received empty board detection")
+ 
++    def controll_callback(self, msg: String):
++        if msg.data == "capture":
++            with self.lock:
++                aruco_msg = self.latest_aruco_detection
++                board_msg = self.latest_board_detection
++            
++            res = Bool()
++            if aruco_msg and board_msg and aruco_msg.detections and board_msg.detections:
++                with self.lock:
++                    self.selected_aruco_detection.append(aruco_msg)
++                    self.selected_board_detection.append(board_msg)
++                res.data = True
++            else:
++                res.data = False
++
++            self.extrinsic_solver_controller_response.publish(res)
++        self._try_solve_calibration()
++            
++
+     def _try_solve_calibration(self):
+         """
+         Attempt to solve calibration if both detection types are available.
+@@ -247,33 +283,13 @@ class EducationalExtrinsicSolver(Node):
+         Educational note: We need both ArUco (2D) and board (3D) detections
+         to create the point correspondences required for PnP solving.
+         """
+-        with self.lock:
+-            aruco_msg = self.latest_aruco_detection
+-            board_msg = self.latest_board_detection
+-
+-        # Check if we have both detection types
+-        if aruco_msg and board_msg:
+-            self.get_logger().info(
+-                f"Processing detection pair: {len(aruco_msg.detections)} ArUco markers, "
+-                f"{len(board_msg.detections)} boards"
+-            )
+-
+-            try:
+-                self._solve_extrinsic_calibration(aruco_msg, board_msg)
+-            except Exception as e:
+-                self.get_logger().error(f"Calibration failed: {e}")
+-        else:
+-            missing = []
+-            if not aruco_msg:
+-                missing.append("ArUco")
+-            if not board_msg:
+-                missing.append("Board")
+-            self.get_logger().debug(
+-                f"Waiting for detections: missing {', '.join(missing)}"
+-            )
++        try:
++            self._solve_extrinsic_calibration()
++        except Exception as e:
++            self.get_logger().error(f"Calibration failed: {e}")
+ 
+     def _solve_extrinsic_calibration(
+-        self, aruco_msg: Detection2DArray, board_msg: Detection3DArray
++        self
+     ) -> bool:
+         """
+         Solve extrinsic calibration using PnP.
+@@ -293,48 +309,58 @@ class EducationalExtrinsicSolver(Node):
+             self.get_logger().error("No camera info available for PnP solving")
+             return False
+ 
+-        if not aruco_msg.detections or not board_msg.detections:
+-            self.get_logger().error("Empty detections - cannot solve PnP")
+-            return False
+-
+-        # Step 2: Convert ROS messages to internal format
+-        aruco_markers = self._detection2d_to_aruco_markers(aruco_msg)
+-        board_detection = self._detection3d_to_board_detection(board_msg.detections[0])
++        selected_object_points = np.empty((0, 3))
++        selected_image_points = np.empty((0, 2))
++        header = None
+ 
+-        # Step 3: Create point correspondences
+-        object_points, image_points = self._create_point_correspondences_educational(
+-            aruco_markers, board_detection
+-        )
++        with self.lock:
++            if len(self.selected_aruco_detection) == 0 or len(self.selected_aruco_detection) != len(self.selected_board_detection):
++                self.get_logger().error("Invalid state - cannot solve PnP")
++                return False
++
++            for aruco_msg, board_msg in zip(self.selected_aruco_detection, self.selected_board_detection):
++                if header is None:
++                    header = aruco_msg.header
++                # Step 2: Convert ROS messages to internal format
++                aruco_markers = self._detection2d_to_aruco_markers(aruco_msg)
++                board_detection = self._detection3d_to_board_detection(board_msg.detections[0])
++                # Step 3: Create point correspondences
++                object_points, image_points = self._create_point_correspondences_educational(
++                    aruco_markers, board_detection
++                )
++                selected_object_points = np.concatenate((selected_object_points, object_points), axis=0)
++                selected_image_points = np.concatenate((selected_image_points, image_points), axis=0)
++                
+ 
+-        if len(object_points) < 4:
++        if len(selected_object_points) < 4:
+             self.get_logger().error(
+-                f"Insufficient correspondences: {len(object_points)} < 4 required for PnP"
++                f"Insufficient correspondences: {len(selected_object_points)} < 4 required for PnP"
+             )
+             return False
+ 
+         self.get_logger().info(
+-            f"Created {len(object_points)} point correspondences for PnP solving"
++            f"Created {len(selected_object_points)} point correspondences for PnP solving"
+         )
+ 
+         # Debug: Print point correspondences for homework data collection
+         self.get_logger().debug("=" * 80)
+         self.get_logger().debug("HOMEWORK DATA COLLECTION - Point Correspondences")
+         self.get_logger().debug("=" * 80)
+-        self.get_logger().debug(f"Number of correspondences: {len(object_points)}")
++        self.get_logger().debug(f"Number of correspondences: {len(selected_object_points)}")
+         self.get_logger().debug("\n3D Object Points (world frame, meters):")
+-        for i, pt in enumerate(object_points):
++        for i, pt in enumerate(selected_object_points):
+             self.get_logger().debug(f"  [{i}] ({pt[0]:.6f}, {pt[1]:.6f}, {pt[2]:.6f})")
+         self.get_logger().debug(
+             "\n2D Image Points (pixels, UNDISTORTED from pipeline):"
+         )
+-        for i, pt in enumerate(image_points):
++        for i, pt in enumerate(selected_image_points):
+             self.get_logger().debug(f"  [{i}] ({pt[0]:.2f}, {pt[1]:.2f})")
+         self.get_logger().debug(f"\nCamera Matrix K:\n{self.camera_info.k}")
+         self.get_logger().debug(f"Distortion coefficients: {self.camera_info.d}")
+         self.get_logger().debug("=" * 80)
+ 
+         # Step 4: Solve PnP problem
+-        success, rvec, tvec = self._solve_pnp_educational(object_points, image_points)
++        success, rvec, tvec = self._solve_pnp_educational(selected_object_points, selected_image_points)
+ 
+         if not success:
+             self.get_logger().error("PnP solver failed")
+@@ -342,7 +368,7 @@ class EducationalExtrinsicSolver(Node):
+ 
+         # Step 5: Publish transformation
+         transform_msg = self._create_transform_message_educational(
+-            rvec, tvec, aruco_msg.header
++            rvec, tvec, header
+         )
+ 
+         try:
+diff --git a/src/ros2/extrinsic_solver_node/launch/extrinsic_solver_controller.launch.py b/src/ros2/extrinsic_solver_node/launch/extrinsic_solver_controller.launch.py
+new file mode 100644
+index 0000000..8157d37
+--- /dev/null
++++ b/src/ros2/extrinsic_solver_node/launch/extrinsic_solver_controller.launch.py
+@@ -0,0 +1,11 @@
++from launch import LaunchDescription
++from launch.actions import ExecuteProcess
++
++def generate_launch_description():
++    return LaunchDescription([
++        ExecuteProcess(
++            cmd=["xterm", "-e", "ros2 run extrinsic_solver_node extrinsic_solver_controller --ros-args -r __ns:=/calibration/extrinsic_solver"],
++            name="extrinsic_solver_controller",
++            output="screen"
++        ),
++    ])
+diff --git a/src/ros2/extrinsic_solver_node/setup.py b/src/ros2/extrinsic_solver_node/setup.py
+index c875776..2c87075 100644
+--- a/src/ros2/extrinsic_solver_node/setup.py
++++ b/src/ros2/extrinsic_solver_node/setup.py
+@@ -26,6 +26,7 @@ setup(
+     entry_points={
+         "console_scripts": [
+             "extrinsic_solver_node = extrinsic_solver_node.main:main",
++            "extrinsic_solver_controller = extrinsic_solver_node.controller:main",
+         ],
+     },
+ )
+diff --git a/src/ros2/lctk_launch/launch/extrinsic_calibration.launch.xml b/src/ros2/lctk_launch/launch/extrinsic_calibration.launch.xml
+index 3db935b..a7a321b 100644
+--- a/src/ros2/lctk_launch/launch/extrinsic_calibration.launch.xml
++++ b/src/ros2/lctk_launch/launch/extrinsic_calibration.launch.xml
+@@ -70,4 +70,7 @@
+         <remap from="aruco_detections" to="$(var aruco_detections_topic)"/>
+         <remap from="calibration_board_detections" to="$(var board_detections_topic)"/>
+     </node>
+-</launch>
+\ No newline at end of file
++
++    <include file="$(find-pkg-share extrinsic_solver_node)/launch/extrinsic_solver_controller.launch.py"/>
++
++</launch>
+-- 
+2.51.0
+
