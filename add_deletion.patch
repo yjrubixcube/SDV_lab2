@@ -1,0 +1,80 @@
+diff --git a/src/ros2/extrinsic_solver_node/extrinsic_solver_node/controller.py b/src/ros2/extrinsic_solver_node/extrinsic_solver_node/controller.py
+index be2ab42..b8b56e3 100644
+--- a/src/ros2/extrinsic_solver_node/extrinsic_solver_node/controller.py
++++ b/src/ros2/extrinsic_solver_node/extrinsic_solver_node/controller.py
+@@ -43,13 +43,13 @@ class ExtrinsicSolverController(Node):
+ 
+     def run(self):
+         while rclpy.ok():
+-            cmd = input("Type 'a' for capturing...").strip()
++            cmd = input("Type 'a' for capturing, 'd' to delete last capture ...").strip()
+             self.get_response = False
+             if cmd == 'a':
+                 req = String()
+                 req.data = "capture"
+                 self.extrinsic_solver_controller_request.publish(req)
+-                print("publish") 
++                print("publish capture") 
+                 while not self.get_response:
+                     rclpy.spin_once(self)
+                     print("wake up")
+@@ -58,6 +58,19 @@ class ExtrinsicSolverController(Node):
+                     self.get_logger().info("OK ... captured")
+                 else:
+                     self.get_logger().info("Failed ... try again")
++            elif cmd == 'd':
++                req = String()
++                req.data = "delete"
++                self.extrinsic_solver_controller_request.publish(req)
++                print("publish delete") 
++                while not self.get_response:
++                    rclpy.spin_once(self)
++                    print("wake up")
++
++                if self.last_response:
++                    self.get_logger().info("OK ... deleted")
++                else:
++                    self.get_logger().info("Failed ... try again")
+             else:
+                 self.get_logger().warn("Invalid ...")
+ 
+diff --git a/src/ros2/extrinsic_solver_node/extrinsic_solver_node/main.py b/src/ros2/extrinsic_solver_node/extrinsic_solver_node/main.py
+index 4bf0f66..3366360 100644
+--- a/src/ros2/extrinsic_solver_node/extrinsic_solver_node/main.py
++++ b/src/ros2/extrinsic_solver_node/extrinsic_solver_node/main.py
+@@ -272,6 +272,21 @@ class EducationalExtrinsicSolver(Node):
+             else:
+                 res.data = False
+ 
++            self.extrinsic_solver_controller_response.publish(res)
++        elif msg.data == "delete":
++            with self.lock:
++                aruco_msg = self.latest_aruco_detection
++                board_msg = self.latest_board_detection
++            
++            res = Bool()
++            if aruco_msg and board_msg and aruco_msg.detections and board_msg.detections and self.selected_aruco_detection and self.selected_board_detection:
++                with self.lock:
++                    self.selected_aruco_detection.pop()
++                    self.selected_board_detection.pop()
++                res.data = True
++            else:
++                res.data = False
++
+             self.extrinsic_solver_controller_response.publish(res)
+         self._try_solve_calibration()
+             
+diff --git a/src/ros2/extrinsic_solver_node/launch/extrinsic_solver_controller.launch.py b/src/ros2/extrinsic_solver_node/launch/extrinsic_solver_controller.launch.py
+index 8157d37..8fc0abc 100644
+--- a/src/ros2/extrinsic_solver_node/launch/extrinsic_solver_controller.launch.py
++++ b/src/ros2/extrinsic_solver_node/launch/extrinsic_solver_controller.launch.py
+@@ -4,7 +4,8 @@ from launch.actions import ExecuteProcess
+ def generate_launch_description():
+     return LaunchDescription([
+         ExecuteProcess(
+-            cmd=["xterm", "-e", "ros2 run extrinsic_solver_node extrinsic_solver_controller --ros-args -r __ns:=/calibration/extrinsic_solver"],
++            # cmd=["xterm", "-e", "ros2 run extrinsic_solver_node extrinsic_solver_controller --ros-args -r __ns:=/calibration/extrinsic_solver"],
++            cmd=["gnome-terminal", "--", "bash", "-c", "ros2 run extrinsic_solver_node extrinsic_solver_controller --ros-args -r __ns:=/calibration/extrinsic_solver"],
+             name="extrinsic_solver_controller",
+             output="screen"
+         ),
