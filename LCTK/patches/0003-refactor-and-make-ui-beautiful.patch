@@ -1,0 +1,220 @@
+From fd67060160f662e17f53f54fee2d0c55118b3a82 Mon Sep 17 00:00:00 2001
+From: pooiscoding <pooisworking@gmail.com>
+Date: Wed, 15 Oct 2025 14:46:58 +0800
+Subject: [PATCH] refactor-and-make-ui-beautiful
+
+---
+ .../extrinsic_solver_node/controller.py       | 91 ++++++++++++++-----
+ .../extrinsic_solver_node/main.py             | 27 +++---
+ 2 files changed, 80 insertions(+), 38 deletions(-)
+
+diff --git a/src/ros2/extrinsic_solver_node/extrinsic_solver_node/controller.py b/src/ros2/extrinsic_solver_node/extrinsic_solver_node/controller.py
+index b8b56e3..b580098 100644
+--- a/src/ros2/extrinsic_solver_node/extrinsic_solver_node/controller.py
++++ b/src/ros2/extrinsic_solver_node/extrinsic_solver_node/controller.py
+@@ -5,6 +5,42 @@ from std_msgs.msg import String, Bool
+ 
+ import threading
+ 
++RED = "\033[31m"
++GREEN = "\033[32m"
++YELLOW = "\033[33m"
++CYAN = "\033[36m"
++GREY = "\033[90m"
++RESET = "\033[0m"
++
++BANNER = """
++================================================================================
++
++                    Interactive Extrinsic Solver Controller
++                                  [By Team 1]
++
++
++Type:
++    a/append: Capture current ArUco dectection and board detection
++    d/delete: Delete the most recently added detections
++    h/help: Show this information
++    exit: Bye ~
++
++================================================================================
++"""
++
++PROMPT = f"\nCMD{CYAN}>{RESET} "
++
++PUBLISHINFO = f"{GREY}[INFO]{RESET} Published control message"
++RECEIVEINFO = f"{GREY}[INFO]{RESET} Received controlled response"
++
++APPENDOK = f"{GREEN}[OK]{RESET} Captured"
++APPENDERR = f"{YELLOW}[ERR]{RESET} Nothing captured. This may be due to missing ArUco or board detection"
++
++DELETEOK = f"{GREEN}[OK]{RESET} Deleted"
++DELETEERR = f"{YELLOW}[ERR]{RESET} Nothing deleted. No detections to remove"
++
++INVALIDERR = f"{RED}[ERR]{RESET} Invalid command"
++
+ class ExtrinsicSolverController(Node):
+     def __init__(self):
+         super().__init__('extrinsic_solver_controller')
+@@ -16,12 +52,12 @@ class ExtrinsicSolverController(Node):
+         )
+ 
+         self.extrinsic_solver_controller_request = self.create_publisher(
+-            String, "extrinsic_solver_controll_request", qos_profile
++            String, "extrinsic_solver_control_request", qos_profile
+         )
+ 
+         self.extrinsic_solver_controller_response = self.create_subscription(
+             Bool,
+-            "extrinsic_solver_controll_response",
++            "extrinsic_solver_control_response",
+             self.controll_callback,
+             qos_profile
+         )
+@@ -30,7 +66,7 @@ class ExtrinsicSolverController(Node):
+         self.get_response = False
+         self.last_response = None
+ 
+-        self.get_logger().info("Extrinsic Solver Controller Start ~")
++        self.get_logger().info("Extrinsic Solver Controller Start")
+ 
+ 
+     def controll_callback(self, msg: Bool):
+@@ -40,39 +76,48 @@ class ExtrinsicSolverController(Node):
+             else:
+                 self.last_response = False
+             self.get_response = True
++        print(RECEIVEINFO)
+ 
+     def run(self):
++        print(BANNER)
+         while rclpy.ok():
+-            cmd = input("Type 'a' for capturing, 'd' to delete last capture ...").strip()
+             self.get_response = False
+-            if cmd == 'a':
+-                req = String()
+-                req.data = "capture"
++            
++            cmd = input(PROMPT)
++            print()
++            
++            req = String()
++            
++            if cmd == 'a' or cmd == "append":
++                req.data = "append"
+                 self.extrinsic_solver_controller_request.publish(req)
+-                print("publish capture") 
++                print(PUBLISHINFO)
++
+                 while not self.get_response:
+                     rclpy.spin_once(self)
+-                    print("wake up")
+-
+-                if self.last_response:
+-                    self.get_logger().info("OK ... captured")
+-                else:
+-                    self.get_logger().info("Failed ... try again")
+-            elif cmd == 'd':
+-                req = String()
++                
++                if self.last_response: print(APPENDOK)
++                else: print(APPENDERR)
++
++            elif cmd == 'd' or cmd == "delete":
+                 req.data = "delete"
+                 self.extrinsic_solver_controller_request.publish(req)
+-                print("publish delete") 
++                print(PUBLISHINFO)
++
+                 while not self.get_response:
+                     rclpy.spin_once(self)
+-                    print("wake up")
+ 
+-                if self.last_response:
+-                    self.get_logger().info("OK ... deleted")
+-                else:
+-                    self.get_logger().info("Failed ... try again")
++                if self.last_response: print(DELETEOK)
++                else: print(DELETEERR)
++
++            elif cmd == 'h' or cmd == "help":
++                print(BANNER)
++
++            elif cmd == "exit":
++                break
++
+             else:
+-                self.get_logger().warn("Invalid ...")
++                print(INVALIDERR)
+ 
+ def main():
+     rclpy.init()
+diff --git a/src/ros2/extrinsic_solver_node/extrinsic_solver_node/main.py b/src/ros2/extrinsic_solver_node/extrinsic_solver_node/main.py
+index 3366360..b9973b7 100644
+--- a/src/ros2/extrinsic_solver_node/extrinsic_solver_node/main.py
++++ b/src/ros2/extrinsic_solver_node/extrinsic_solver_node/main.py
+@@ -159,13 +159,13 @@ class EducationalExtrinsicSolver(Node):
+         )
+         self.extrinsic_solver_controller_request = self.create_subscription(
+             String,
+-            "extrinsic_solver_controll_request",
++            "extrinsic_solver_control_request",
+             self.controll_callback,
+             qos_profile_reliable
+         )
+ 
+         self.extrinsic_solver_controller_response = self.create_publisher(
+-            Bool, "extrinsic_solver_controll_response", qos_profile_reliable
++            Bool, "extrinsic_solver_control_response", qos_profile_reliable
+         )
+ 
+         # Derive camera_info topic from camera_topic parameter (image_pipeline convention)
+@@ -258,12 +258,13 @@ class EducationalExtrinsicSolver(Node):
+             self.get_logger().warn("Received empty board detection")
+ 
+     def controll_callback(self, msg: String):
+-        if msg.data == "capture":
++        res = Bool()
++        
++        if msg.data == "append":
+             with self.lock:
+                 aruco_msg = self.latest_aruco_detection
+                 board_msg = self.latest_board_detection
+             
+-            res = Bool()
+             if aruco_msg and board_msg and aruco_msg.detections and board_msg.detections:
+                 with self.lock:
+                     self.selected_aruco_detection.append(aruco_msg)
+@@ -273,23 +274,19 @@ class EducationalExtrinsicSolver(Node):
+                 res.data = False
+ 
+             self.extrinsic_solver_controller_response.publish(res)
++        
+         elif msg.data == "delete":
+             with self.lock:
+-                aruco_msg = self.latest_aruco_detection
+-                board_msg = self.latest_board_detection
+-            
+-            res = Bool()
+-            if aruco_msg and board_msg and aruco_msg.detections and board_msg.detections and self.selected_aruco_detection and self.selected_board_detection:
+-                with self.lock:
++                if len(self.selected_aruco_detection) > 0 and len(self.selected_aruco_detection) == len(self.selected_board_detection):
+                     self.selected_aruco_detection.pop()
+                     self.selected_board_detection.pop()
+-                res.data = True
+-            else:
+-                res.data = False
++                    res.data = True
++                else:
++                    res.data = False
+ 
+             self.extrinsic_solver_controller_response.publish(res)
+-        self._try_solve_calibration()
+-            
++        
++        self._try_solve_calibration()    
+ 
+     def _try_solve_calibration(self):
+         """
+-- 
+2.51.0
+
